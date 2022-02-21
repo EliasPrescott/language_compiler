@@ -1,2 +1,9 @@
-let x = 32;
-testing_var
+let x = 0;
+let y = 100;
+
+{
+    {
+        let testing_var = 23253524;
+        testing_var
+    }
+}
