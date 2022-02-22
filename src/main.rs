@@ -1,6 +1,6 @@
 mod parsing;
 
-use std::{fs, rc::Rc, cell::RefCell};
+use std::{fs, rc::Rc, cell::RefCell, sync::Arc};
 use parsing::*;
 
 const TESTING_FILE_PATH: &str = "test.txt";
@@ -57,7 +57,7 @@ fn parse_variable_ref(input: &mut ParseInput) -> Result<ASTExpression, String> {
 }
 
 // Instead of parsing input directly, this function takes in an interior_parser, and then builds a new parser that will continually run that interior_parser within a braced scope.
-fn parse_scope_with_parser(interior_parser: Box<dyn Fn(&mut ParseInput) -> Result<ASTExpression, String>>) -> Box<dyn Fn(&mut ParseInput) -> Result<ASTExpression, String>> {
+fn parse_scope_with_parser(interior_parser: Arc<dyn Fn(&mut ParseInput) -> Result<ASTExpression, String>>) -> Box<dyn Fn(&mut ParseInput) -> Result<ASTExpression, String>> {
     Box::new(move | input: &mut ParseInput | {
         let mut output = vec!();
         input.skip_char('{')?;
@@ -79,7 +79,7 @@ fn parse_scope_with_parser(interior_parser: Box<dyn Fn(&mut ParseInput) -> Resul
     })
 }
 
-fn parse_parentheses_with_parser(interior_parser: Box<dyn Fn(&mut ParseInput) -> Result<ASTExpression, String>>) -> Box<dyn Fn(&mut ParseInput) -> Result<ASTExpression, String>> {
+fn parse_parentheses_with_parser(interior_parser: Arc<dyn Fn(&mut ParseInput) -> Result<ASTExpression, String>>) -> Box<dyn Fn(&mut ParseInput) -> Result<ASTExpression, String>> {
     Box::new(move | input: &mut ParseInput | {
         let mut output = vec!();
         input.skip_char('(')?;
@@ -112,7 +112,7 @@ fn parse_parentheses_with_parsers<'a>(parsers: Box<Vec<&'a (dyn for<'r> Fn(&'r m
     })
 }
 
-fn parse_assignment_with_parsers<'a>(parsers: Rc<RefCell<Vec<Box<dyn for<'r> Fn(&'r mut ParseInput) -> Result<ASTExpression, String>>>>>) -> Box<dyn for<'r> Fn(&'r mut ParseInput) -> Result<ASTExpression, String> + 'a> {
+fn parse_assignment_with_parser<'a>(interior_parser: Arc<dyn Fn(&mut ParseInput) -> Result<ASTExpression, String>>) -> Box<dyn for<'r> Fn(&'r mut ParseInput) -> Result<ASTExpression, String> + 'a> {
     Box::new(move | input: &mut ParseInput | {
         let initialization = input.skip_string("let").is_ok();
         input.skip_spaces_and_newlines();
@@ -120,7 +120,7 @@ fn parse_assignment_with_parsers<'a>(parsers: Rc<RefCell<Vec<Box<dyn for<'r> Fn(
         input.skip_spaces_and_newlines();
         input.skip_char('=')?;
         input.skip_spaces_and_newlines();
-        let variable_value = try_parsers_with_list(parsers.clone())(input)?;
+        let variable_value = interior_parser(input)?;
 
         if initialization {
             Ok(ASTExpression::ASTInitialization(variable_name, Box::new(variable_value)))
@@ -165,11 +165,11 @@ fn try_parsers_with_list<'a>(parsers: Rc<RefCell<Vec<Box<dyn for<'r> Fn(&'r mut 
     })
 }
 
-fn parse_function_with_parser<'a>(parameter_parser: &'static dyn Fn(&mut ParseInput) -> Result<ASTExpression, String>, body_parser: &'static dyn Fn(&mut ParseInput) -> Result<ASTExpression, String>) -> Box<dyn for<'r> Fn(&'r mut ParseInput) -> Result<ASTExpression, String> + 'a> {
+fn parse_function_with_parser<'a>(interior_parser: Arc<dyn Fn(&mut ParseInput) -> Result<ASTExpression, String>>) -> Box<dyn for<'r> Fn(&'r mut ParseInput) -> Result<ASTExpression, String> + 'a> {
     Box::new(move | input: &mut ParseInput | {
-        let parameters = parse_parentheses_with_parser(Box::new(parameter_parser))(input)?;
+        let parameters = parse_parentheses_with_parser(interior_parser.clone())(input)?;
         input.skip_spaces_and_newlines();
-        let body = parse_scope_with_parser(Box::new(body_parser))(input)?;
+        let body = parse_scope_with_parser(interior_parser.clone())(input)?;
         Ok(
             ASTExpression::ASTFunction(
                 Box::new(parameters),
@@ -189,20 +189,15 @@ fn main() {
                 Box::new(parse_variable_ref)
             )));
 
-            // I don't think I should need to make this parser multiple times, but I'm not sure how it could be shared properly.
-            // Building it a few times likely adds very little overhead, so it's probably not a huge concern.
-            let main_parser = try_parsers_with_list(parsers.clone());
-            let scope_inner = try_parsers_with_list(parsers.clone());
-            let parentheses_inner = try_parsers_with_list(parsers.clone());
+            // To pass the main recursive parser around, you first prepare it and leak it here to make it static, then you dereference and re-reference it to make it immutable.
+            let main_parser = &*Box::leak(try_parsers_with_list(parsers.clone()));
 
-            // Leaking memory like this is a big no-no, so this should be refactored.
-            let func_parameters_inner = Box::leak(try_parsers_with_list(parsers.clone()));
-            let func_body_inner = Box::leak(try_parsers_with_list(parsers.clone()));
-
-            let scope_parser = parse_scope_with_parser(scope_inner);
-            let parentheses_parser = parse_parentheses_with_parser(parentheses_inner);
-            let assignment_parser = parse_assignment_with_parsers(parsers.clone());
-            let function_parser = parse_function_with_parser(func_parameters_inner, func_body_inner);
+            // Here, I create the recursive parsers by passing the main_parser into multiple functions.
+            // Wrapping main_parser in an Arc instead of a Rc adds some overhead, but should allow for multi-threaded parsing down the line. 
+            let scope_parser = parse_scope_with_parser(Arc::new(main_parser));
+            let parentheses_parser = parse_parentheses_with_parser(Arc::new(main_parser));
+            let function_parser = parse_function_with_parser(Arc::new(main_parser));
+            let assignment_parser = parse_assignment_with_parser(Arc::new(main_parser));
 
             // After constructing the scope_parser and passing the main parser into it, I then add the scope_parser into the main parser.
             // This allows for endless recursive parsing, but it also makes the type definitions explode in length.
