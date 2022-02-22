@@ -10,8 +10,6 @@ enum ASTExpression {
     ASTVariableRef(String),
     ASTInteger(i64),
     ASTString(String),
-
-    // I'm only parsing integer assignment right now, but this variant is ready for future use by accepting all expression types.
     ASTAssignment(String, Box<ASTExpression>),
     ASTInitialization(String, Box<ASTExpression>),
     ASTScope(Vec<Box<ASTExpression>>),
@@ -205,8 +203,6 @@ fn main() {
             parsers.borrow_mut().push(Box::new(scope_parser));
             parsers.borrow_mut().push(Box::new(parentheses_parser));
             parsers.borrow_mut().insert(0, Box::new(function_parser));
-
-            // Adding the assignment parser to the beginning of parsers, because parse_variable_ref would override it otherwise.
             parsers.borrow_mut().insert(1, Box::new(assignment_parser));
 
             let mut input = ParseInput::new(contents);
