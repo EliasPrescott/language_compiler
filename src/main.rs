@@ -9,6 +9,7 @@ const TESTING_FILE_PATH: &str = "test.txt";
 enum ASTExpression {
     ASTVariableRef(String),
     ASTInteger(i64),
+    ASTString(String),
 
     // I'm only parsing integer assignment right now, but this variant is ready for future use by accepting all expression types.
     ASTAssignment(String, Box<ASTExpression>),
@@ -16,7 +17,7 @@ enum ASTExpression {
     ASTUnit,
 }
 
-fn parse_integer(input: &mut ParseInput) -> Result<i64, String> {
+fn parse_integer(input: &mut ParseInput) -> Result<ASTExpression, String> {
     // The pop_next_char_numerical and other similar methods only mutate the ParseInput if the next char matches the predicate.
     // This fact will need to be explicit in the documentation for these methods.
     let first_char = input.pop_next_char_numerical()?;
@@ -24,7 +25,16 @@ fn parse_integer(input: &mut ParseInput) -> Result<i64, String> {
     while let Ok(next_char) = input.pop_next_char_numerical() {
         output += &next_char.to_string();
     }
-    Ok(str::parse::<i64>(&output).map_err(|err| err.to_string())?)
+    Ok(ASTExpression::ASTInteger(str::parse::<i64>(&output).map_err(|err| err.to_string())?))
+}
+
+fn parse_string_literal(input: &mut ParseInput) -> Result<ASTExpression, String> {
+    // The question mark operator at the end of these parser functions will return early if that expression is a Result::Err case.
+    // This allows for extremely concise and convenient error-handling.
+    input.skip_char('"')?;
+    let output = input.pop_until_char('"');
+    input.skip_char('"')?;
+    Ok(ASTExpression::ASTString(output))
 }
 
 fn parse_name(input: &mut ParseInput) -> Result<String, String> {
@@ -66,16 +76,34 @@ fn parse_scope_with_parser(interior_parser: Box<dyn Fn(&mut ParseInput) -> Resul
     })
 }
 
-fn parse_integer_assignment(input: &mut ParseInput) -> Result<ASTExpression, String> {
+fn parse_assignment(input: &mut ParseInput) -> Result<ASTExpression, String> {
     input.skip_string("let")?;
     input.skip_spaces_and_newlines();
     let variable_name = parse_name(input)?;
     input.skip_spaces_and_newlines();
     input.skip_char('=')?;
     input.skip_spaces_and_newlines();
-    let variable_value = parse_integer(input)?;
+    // This parser should be converted to work more like parse_scope_with_parser.
+    // This would allow it to parse all kinds of expression assignments recursively. 
+    let variable_value = try_parsers(input, vec!(&parse_integer, &parse_string_literal))?;
     input.skip_char(';')?;
-    Ok(ASTExpression::ASTAssignment(variable_name, Box::new(ASTExpression::ASTInteger(variable_value))))
+    Ok(ASTExpression::ASTAssignment(variable_name, Box::new(variable_value)))    
+}
+
+// A simpler version of try_parsers that does not support adding in more parsers later for recursion purposes
+fn try_parsers(input: &mut ParseInput, parsers: Vec<&dyn Fn(&mut ParseInput) -> Result<ASTExpression, String>>) -> Result<ASTExpression, String> {
+    let save_point = input.create_save_point();
+    let mut last_err = String::new();
+    for parser in parsers {
+        match parser(input) {
+            Ok(x) => return Ok(x),
+            Err(err) => {
+                last_err = err;
+                input.load_save_point(save_point);
+            }
+        }
+    }
+    Err(last_err.to_string())
 }
 
 /// Tries every parser in a list. Returns the first successful parse result, or the last error if all fail. 
@@ -99,12 +127,14 @@ fn try_parsers_with_list<'a>(parsers: Rc<RefCell<Vec<Box<dyn for<'r> Fn(&'r mut 
 fn main() {
     match fs::read_to_string(TESTING_FILE_PATH) {
         Ok(contents) => {
+
             let parsers: Rc<RefCell<Vec<Box<dyn for<'r> Fn(&'r mut ParseInput) -> Result<ASTExpression, String>>>>> = Rc::new(RefCell::new(vec!(
-                Box::new(parse_integer_assignment), 
+                Box::new(parse_assignment),
+                Box::new(parse_string_literal), 
                 Box::new(parse_variable_ref),
             )));
 
-            // I don't think I should need to make this parser twice, but I'm how it could be shared properly.
+            // I don't think I should need to make this parser twice, but I'm not sure how it could be shared properly.
             // Building it a few times likely adds very little overhead, so it's probably not a huge concern.
             let main_parser = try_parsers_with_list(parsers.clone());
             let main_parser_ref = try_parsers_with_list(parsers.clone());
@@ -139,7 +169,6 @@ fn main() {
                 }
             }
 
-            // Only just learned this, but :#? allows for pretty-printing the AST output.
             println!("{:#?}", ast_tree);
         },
         Err(err) => println!("{}", err)        

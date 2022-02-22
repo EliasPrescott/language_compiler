@@ -1,9 +1,13 @@
 let x = 0;
-let y = 100;
+let y = "hello language";
 
 {
     {
         let testing_var = 23253524;
         testing_var
     }
+}
+
+{
+    "scoped string"
 }
