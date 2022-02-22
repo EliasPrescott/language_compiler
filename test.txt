@@ -1,13 +1,14 @@
-let x = 0;
-let y = "hello language";
+let zero = 0
+let x = y = (z = "hello")
 
-{
-    {
-        let testing_var = 23253524;
-        testing_var
-    }
+let mockFunction = (arg) {
+    arg
 }
 
-{
+let scopeExpression = {
     "scoped string"
+
+    let childEmptyExpression = {
+
+    }
 }

@@ -4,7 +4,7 @@ pub struct ParseInput {
 }
 
 #[derive(Clone, Copy)]
-pub struct ParseSavePoint(usize);
+pub struct ParseSavePoint(pub usize);
 
 pub type CharIndice = (usize, char);
 
